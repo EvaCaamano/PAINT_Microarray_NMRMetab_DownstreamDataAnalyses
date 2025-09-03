@@ -152,12 +152,14 @@ fit2_corfit_Res<-topTable(fit2_corfit, coef="Treatment_vs_Control",adjust.method
 
 dim(fit2_corfit_Res[fit2_corfit_Res$adj.P.Val<0.05,])#only 154
 
-#comparison with SAM results
+#comparison with SAM results- previous work, SAM results not included here yet
 length(rownames(fit2_corfit_Res[fit2_corfit_Res$adj.P.Val<0.05,])[rownames(fit2_corfit_Res[fit2_corfit_Res$adj.P.Val<0.05,])%in%strsplit2(samDaysOutAll[samDaysOutAll$q.value...<5,"Gene.Name"],"_")[,1]])#119 overlap
 
 #comparison sex and no sex
 length(intersect(rownames(fit2_corfit_noSex_Res[fit2_corfit_noSex_Res$adj.P.Val<0.05,]),rownames(fit2_corfit_Res[fit2_corfit_Res$adj.P.Val<0.05,])))#149 overlap
 
+write.csv(fit2_corfit_noSex_Res,"UnivariateResults_MicroarrayData_TimePatient.csv")
+write.csv(fit2_corfit_Res,"UnivariateResults_MicroarrayData_TimeSexPatient.csv")
 
 ####### FUNCTIONAL ENRICHMENT#####
 
