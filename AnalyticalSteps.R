@@ -152,7 +152,7 @@ fit2_corfit_Res<-topTable(fit2_corfit, coef="Treatment_vs_Control",adjust.method
 
 dim(fit2_corfit_Res[fit2_corfit_Res$adj.P.Val<0.05,])#only 154
 
-#comparison with SAM results- previous work, SAM results not included here yet
+#comparison with SAM results
 length(rownames(fit2_corfit_Res[fit2_corfit_Res$adj.P.Val<0.05,])[rownames(fit2_corfit_Res[fit2_corfit_Res$adj.P.Val<0.05,])%in%strsplit2(samDaysOutAll[samDaysOutAll$q.value...<5,"Gene.Name"],"_")[,1]])#119 overlap
 
 #comparison sex and no sex
@@ -564,3 +564,447 @@ pca_metab_signif_Sex<-plot_pca(data = numeric_dataMETAB[,colnames(numeric_dataME
 ggsave(plot = pca_metab_signif_Sex,filename = "PCA_signifMetabTimeSex.tiff", units="in", width=7, height=6, dpi=300, compression = 'lzw',bg="white")
 
 write.csv(fit2_corfit_SexMETAB_Res,"DifferentialAbundanceMetabolites_ModelTimeSexPatient.csv")
+
+#------------------------------------------------------
+#---- EXTRA ANALYSES TAKING INTO ACCOUNG GESTATION ----
+#------------------------------------------------------
+
+
+set.seed(800)
+LTU_NS<-LTU_data[,strsplit2(colnames(LTU_data),"_")[,3]%in%c("N")]
+TimeFactor_NS<-strsplit2(colnames(LTU_NS),"_")[,2]
+Sex_NS<-strsplit2(colnames(LTU_NS),"_")[,4]
+Patient_NS<-strsplit2(colnames(LTU_NS),"_")[,1]
+lauMeta2<-lauMeta
+lauMeta2$PatientID<-as.character(lauMeta$Study.No)
+lauMeta2$PatientID[lauMeta2$Study.No<10]<-paste0("P0",lauMeta$Study.No[lauMeta2$Study.No<10])
+lauMeta2$PatientID[lauMeta2$Study.No>10]<-paste0("P",lauMeta$Study.No[lauMeta2$Study.No>10])
+
+Gestational_Age<-lauMeta[match(Patient_NS,lauMeta2$PatientID),"Gest"]
+
+
+data_for_limmaGEST<-data.frame("Time"=TimeFactor_NS,
+                               "Sex"=Sex_NS,
+                               "PatientID"=Patient_NS,
+                               "Gest"=Gestational_Age,
+                               t(LTU_NS))
+
+data_for_limmaGEST<-data_for_limmaGEST[complete.cases(data_for_limmaGEST),]
+data_for_limmaGEST$Time<-factor(data_for_limmaGEST$Time,levels=c("t3","t10"))
+data_for_limmaGEST$PatientID<-factor(data_for_limmaGEST$PatientID)
+data_for_limmaGEST$Sex<-factor(data_for_limmaGEST$Sex,levels=c("M","F"))
+numeric_data<-data_for_limmaGEST[,5:ncol(data_for_limmaGEST)]
+
+#### Analysis of variance to determine covariates----
+
+
+formGEST <- ~(1|Time)+Gest+(1|PatientID)+(1|Sex)
+
+
+
+#note as per package recommendation, all categorical variables are modeled as random effects with continuous as fixed effects
+
+varPartGEST <- fitExtractVarPartModel(t(numeric_data), formGEST, data_for_limmaGEST[,1:4])
+
+vpGEST <- sortCols(varPartGEST,last="Residuals")
+vpGEST_bars <- plotPercentBars(vpGEST[vpGEST$Sex>0.15 &vpGEST$Time>0.15 &vpGEST$PatientID>0.15 &vpGEST$Gest>0.15, ])+theme(legend.position="bottom")#top most affected by time and sex
+vpGEST_barsT <- plotPercentBars(vpGEST[vpGEST$Sex<0.01 &vpGEST$Time>0.48 &vpGEST$PatientID<0.01 &vpGEST$Gest<0.01, ])+theme(legend.position="bottom")#most affected by time
+vpGEST_barsS <- plotPercentBars(vpGEST[vpGEST$Sex>0.35 &vpGEST$Time<0.05&vpGEST$PatientID<0.01 &vpGEST$Gest<0.01, ])+theme(legend.position="bottom")#most affected by sex
+vpGEST_barsP <- plotPercentBars(vpGEST[vpGEST$Sex<0.01 &vpGEST$Time<0.01&vpGEST$PatientID>0.995 &vpGEST$Gest<0.01, ])+theme(legend.position="bottom")#most affected by patientID
+vpGEST_barsG <- plotPercentBars(vpGEST[vpGEST$Sex<0.01 &vpGEST$Time<0.01&vpGEST$PatientID<0.01 &vpGEST$Gest>0.4, ])+theme(legend.position="bottom")
+vpGEST_violin <- plotVarPart(vpGEST) 
+
+ggarrange(vpGEST_bars, vpGEST_barsT,vpGEST_barsS,vpGEST_barsP,vpGEST_barsG, vpGEST_violin, 
+          labels = c("A", "B","C","D","E", "F"),
+          ncol = 2, nrow = 3)
+
+micro_varPar_plotGEST<-ggarrange(vpGEST_bars, vpGEST_barsT,vpGEST_barsS,vpGEST_barsP,vpGEST_barsG, vpGEST_violin, 
+                                 labels = c("A", "B","C","D","E", "F"),
+                                 ncol = 2, nrow = 3)
+ggsave(plot = micro_varPar_plotGEST,filename = "micro_varPar_plot_wPIDGEST.tiff", units="in", width=10, height=11.5, dpi=300, compression = 'lzw',bg="white")
+
+
+# DIFFERENTIAL GENE EXPRESSION ####
+##### limma with duplicated correlations, group only
+# DGE using the correlation structure to account for repeated measurements, no taking into account sex
+
+# Group first, intercept removed
+designNoPatYesGestNoSexYesGest<-model.matrix(~0+Time+Gest,data=data_for_limmaGEST)
+
+colnames(designNoPatYesGestNoSexYesGest)<-c("t3","t10","Gest")#for sex F is 1
+
+colnames(designNoPatYesGestNoSexYesGest)
+
+
+# Correlation structure (accounting for repeated measures)
+corfitYesGest_noPatnoSexYesGest <- duplicateCorrelation(t(numeric_data), designNoPatYesGestNoSexYesGest, block = data_for_limmaGEST$PatientID)
+
+fit_corfitYesGest_noSexYesGest <- lmFit(t(numeric_data), designNoPatYesGestNoSexYesGest, block = data_for_limmaGEST$PatientID, correlation = corfitYesGest_noPatnoSexYesGest$consensus)
+
+# Contrast of interest: Treatment vs Control
+contrast.matrixYesGest2YesGest <- makeContrasts(Treatment_vs_Control = t10 - t3,
+                                                levels = designNoPatYesGestNoSexYesGest
+)
+
+fit2_corfitYesGest_noSexYesGest <- contrasts.fit(fit_corfitYesGest_noSexYesGest, contrast.matrixYesGest2YesGest)
+fit2_corfitYesGest_noSexYesGest <- eBayes(fit2_corfitYesGest_noSexYesGest)
+fit2_corfitYesGest_noSexYesGest_Res<-topTable(fit2_corfitYesGest_noSexYesGest, coef="Treatment_vs_Control",adjust.method = "BH",number = ncol(numeric_data),)
+
+dim(fit2_corfitYesGest_noSexYesGest_Res[fit2_corfitYesGest_noSexYesGest_Res$adj.P.Val<0.05,])#836 genes
+
+#comparison with SAM results and previous limma results
+length(rownames(fit2_corfitYesGest_noSexYesGest_Res[fit2_corfitYesGest_noSexYesGest_Res$adj.P.Val<0.05,])[rownames(fit2_corfitYesGest_noSexYesGest_Res[fit2_corfitYesGest_noSexYesGest_Res$adj.P.Val<0.05,])%in%strsplit2(samDaysOutAll[samDaysOutAll$q.value...<5,"Gene.Name"],"_")[,1]])#582 overlap
+length(rownames(fit2_corfitYesGest_noSexYesGest_Res[fit2_corfitYesGest_noSexYesGest_Res$adj.P.Val<0.05,])[rownames(fit2_corfit_noSexYesGest_Res[fit2_corfitYesGest_noSexYesGest_Res$adj.P.Val<0.05,])%in%rownames(fit2_corfit_noSex_Res[fit2_corfit_noSex_Res$adj.P.Val<0.05,])])#733/836 overlapping
+
+
+
+##### limma with duplicated correlations, group and sex
+# Group and SEX- with group first, intercept removed
+designNoPatYesGest<-model.matrix(~0+Time+Gest+Sex,data=data_for_limmaGEST)
+
+colnames(designNoPatYesGest)<-c("t3","t10","Gest","Sex")#for sex F is 1
+
+colnames(designNoPatYesGest)
+
+
+# Correlation structure (accounting for repeated measures- No SEX)
+corfitYesGest <- duplicateCorrelation(t(numeric_data), designNoPatYesGest, block = data_for_limmaGEST$PatientID)
+
+fit_corfitYesGest <- lmFit(t(numeric_data), designNoPatYesGest, block = data_for_limmaGEST$PatientID, correlation = corfitYesGest$consensus)
+
+# Contrast of interest: Treatment vs Control
+contrast.matrixYesGest <- makeContrasts(Treatment_vs_Control = t10 - t3,
+                                        levels = designNoPatYesGest
+)
+
+fit2_corfitYesGest <- contrasts.fit(fit_corfitYesGest, contrast.matrixYesGest)
+fit2_corfitYesGest <- eBayes(fit2_corfitYesGest)
+fit2_corfitYesGest_Res<-topTable(fit2_corfitYesGest, coef="Treatment_vs_Control",adjust.method = "BH",number = ncol(numeric_data),)
+
+dim(fit2_corfitYesGest_Res[fit2_corfitYesGest_Res$adj.P.Val<0.05,])#only 98
+
+#comparison with SAM results
+length(rownames(fit2_corfitYesGest_Res[fit2_corfitYesGest_Res$adj.P.Val<0.05,])[rownames(fit2_corfitYesGest_Res[fit2_corfitYesGest_Res$adj.P.Val<0.05,])%in%strsplit2(samDaysOutAll[samDaysOutAll$q.value...<5,"Gene.Name"],"_")[,1]])#74 overlap
+
+#comparison sex and no sex
+length(intersect(rownames(fit2_corfit_noSexYesGest_Res[fit2_corfit_noSexYesGest_Res$adj.P.Val<0.05,]),rownames(fit2_corfitYesGest_Res[fit2_corfitYesGest_Res$adj.P.Val<0.05,])))#96/98 overlap
+
+write.csv(fit2_corfit_noSexYesGest_Res,"UnivariateResults_MicroarrayData_TimePatient_Gestation.csv")
+write.csv(fit2_corfitYesGest_Res,"UnivariateResults_MicroarrayData_TimeSexPatient_Gestation.csv")
+
+####### FUNCTIONAL ENRICHMENT#####
+
+
+##### on results from model with time only #####
+IDs_YesGest<-mapIds(org.Hs.eg.db,keys=rownames(fit2_corfit_noSexYesGest_Res),
+                    keytype = "SYMBOL",#what we have
+                    column="ENTREZID",
+                    multiVals=first)#what to do if multiple mappings-we get the first in thsi case
+
+fit2_corfit_noSexYesGest_Res$EntrezID<-IDs_YesGest
+
+ranked_gene_list_Time_YesGest <- fit2_corfit_noSexYesGest_Res %>%
+  # Calculate rank metric
+  mutate(rank_metric = -log10(P.Value) * sign(logFC)) %>% 
+  #Sort in descending order
+  arrange(desc(rank_metric)) %>% 
+  # Extract ranked gene list
+  pull(rank_metric, EntrezID) 
+
+
+reactome_pathways_Time_YesGest <- reactomePathways(names(ranked_gene_list_Time_YesGest))
+
+set.seed(800)
+fgseaRes_Time_YesGest <- fgsea(pathways = reactome_pathways_Time_YesGest,
+                               stats = ranked_gene_list_Time_YesGest,
+                               minSize = 10,
+                               maxSize = 300)
+
+fgseaRes_Time_YesGest <- fgseaRes_Time_YesGest[order(fgseaRes_Time_YesGest$padj), ]
+head(fgseaRes_Time_YesGest)
+
+#add -log10 transformed FDR values
+fgseaRes_Time_YesGest$log10_p.adjust<--log10(fgseaRes_Time_YesGest$padj)
+
+fgseaRes_Time_YesGest_filtered <- fgseaRes_Time_YesGest[fgseaRes_Time_YesGest$padj<0.05 & (fgseaRes_Time_YesGest$NES>2.5 | fgseaRes_Time_YesGest$NES<= -1) ,] %>%
+  arrange(abs(NES)) %>%
+  slice_head(n = 50) 
+
+# fgseaRes_Time_YesGest_filtered <- fgseaRes_Time_YesGest[fgseaRes_Time_YesGest$padj<0.02 & abs(fgseaRes_Time_YesGest$NES)>1.2,] %>%
+#   arrange(desc(log10_p.adjust)) %>%
+#   slice_head(n = 50)
+
+# Create dot plot
+gt_YesGest <- ggplot(fgseaRes_Time_YesGest_filtered,
+                     aes(x = NES, y = reorder(pathway, NES))) +
+  geom_point(aes(size = size, colour = log10_p.adjust)) +
+  geom_vline(xintercept = 0, colour = 1, lwd = 0.2) +
+  scale_colour_gradientn(colours = c("#c8e7f7", "#1b5482")) +
+  scale_size(range = c(2, 8)) +
+  xlab("Normalised enrichment score (NES)") +
+  ylab("Pathway") +
+  labs(colour = expression("-log"[10]*"(adj.P)"), size = "Gene Set Size") +
+  theme_minimal(base_size = 14)+theme(
+    text = element_text(color = "black", face = "bold"),        # all text black
+    axis.text = element_text(color = "black"),   # axis tick labels
+    axis.title = element_text(color = "black"),  # axis titles
+  ) 
+
+gt_YesGest
+ggsave(plot = gt_YesGest,filename = "GSEA_Reactome_Time_YesGest.tiff", units="in", width=11, height=11.5, dpi=300, compression = 'lzw',bg="white")
+
+dim(fgseaRes_Time_YesGest[fgseaRes_Time_YesGest$padj<0.05,])
+fgseaRes_Time_YesGest[grep("Metallothionein",fgseaRes_Time_YesGest$pathway),]#just under the limit of significance (0.09 adjusted)
+
+#format the leading edge so it is not a list
+fgseaRes_Time_YesGest_tidy <- fgseaRes_Time_YesGest %>%
+  mutate(leadingEdge = sapply(leadingEdge, function(x) paste(x, collapse = ";")))
+
+write.csv(fgseaRes_Time_YesGest_tidy,"Reactome_GSEARes_TimeANDGESTATION.csv",row.names = F)
+##### on results from model with sex and time #####
+test_YesGest<-mapIds(org.Hs.eg.db,keys=rownames(fit2_corfitYesGest_Res),
+                     keytype = "SYMBOL",#what we have
+                     column="ENTREZID",
+                     multiVals=first)#what to do if multiple mappings-we get the first in thsi case
+
+fit2_corfitYesGest_Res$EntrezID<-test_YesGest
+
+ranked_gene_list_Time_YesGestSex <- fit2_corfitYesGest_Res %>%
+  # Calculate rank metric
+  mutate(rank_metric = -log10(P.Value) * sign(logFC)) %>% 
+  #Sort in descending order
+  arrange(desc(rank_metric)) %>% 
+  # Extract ranked gene list
+  pull(rank_metric, EntrezID) 
+
+
+reactome_pathways_Time_YesGestSex <- reactomePathways(names(ranked_gene_list_Time_YesGestSex))
+
+set.seed(800)
+fgseaRes_Time_YesGestSex <- fgsea(pathways = reactome_pathways_Time_YesGestSex,
+                                  stats = ranked_gene_list_Time_YesGestSex,
+                                  minSize = 10,
+                                  maxSize = 300)
+
+fgseaRes_Time_YesGestSex <- fgseaRes_Time_YesGestSex[order(fgseaRes_Time_YesGestSex$padj), ]
+head(fgseaRes_Time_YesGestSex)
+
+#add -log10 transformed FDR values
+fgseaRes_Time_YesGestSex$log10_p.adjust<--log10(fgseaRes_Time_YesGestSex$padj)
+
+fgseaRes_Time_YesGestSex_filtered <- fgseaRes_Time_YesGestSex[fgseaRes_Time_YesGestSex$padj<0.05 & (fgseaRes_Time_YesGestSex$NES>2.4 | fgseaRes_Time_YesGestSex$NES<= -1) ,] %>%
+  arrange(abs(NES)) %>%
+  slice_head(n = 50) 
+
+# Create dot plot
+gst_YesGest <- ggplot(fgseaRes_Time_YesGestSex_filtered,
+                      aes(x = NES, y = reorder(pathway, NES))) +
+  geom_point(aes(size = size, colour = log10_p.adjust)) +
+  geom_vline(xintercept = 0, colour = 1, lwd = 0.2) +
+  scale_colour_gradientn(colours = c("#c8e7f7", "#1b5482")) +
+  scale_size(range = c(2, 8)) +
+  xlab("Normalised enrichment score (NES)") +
+  ylab("Pathway") +
+  labs(colour = expression("-log"[10]*"(adj.P)"), size = "Gene Set Size") +
+  theme_minimal(base_size = 14)+
+  theme(
+    text = element_text(color = "black", face = "bold"),        # all text black
+    axis.text = element_text(color = "black"),   # axis tick labels
+    axis.title = element_text(color = "black"),  # axis titles
+  ) 
+
+gst_YesGest
+ggsave(plot = gst_YesGest,filename = "GSEA_Reactome_TimeSEXandGESTATION.tiff", units="in", width=11, height=11.5, dpi=300, compression = 'lzw',bg="white")
+
+
+
+#format the leading edge so it is not a list
+fgseaRes_Time_YesGestSex_tidy <- fgseaRes_Time_YesGestSex %>%
+  mutate(leadingEdge = sapply(leadingEdge, function(x) paste(x, collapse = ";")))
+
+write.csv(fgseaRes_Time_YesGestSex_tidy,"Reactome_GSEARes_TimeSexAndGestation.csv",row.names = F)
+
+gt_YesGests<-ggarrange(gt_YesGest, gst_YesGest, 
+                       labels = c("A", "B"),
+                       ncol = 2, nrow = 1)
+ggsave(plot = gt_YesGests,filename = "GSEA_Reactome_TIMEA_TimeSEXB_andGESTATION.tiff", units="in", width=21, height=11, dpi=300, compression = 'lzw',bg="white")
+
+
+# Other figures ----
+
+#Heatmap
+
+expr_signif_Time_YesGestSex<-t(data_for_limmaGEST[,colnames(data_for_limmaGEST)%in%rownames(fit2_corfit_noSexYesGest_Res[fit2_corfit_noSexYesGest_Res$adj.P.Val<0.05,])])
+expr_signif_Time_YesGestSexSex<-t(data_for_limmaGEST[,colnames(data_for_limmaGEST)%in%rownames(fit2_corfitYesGest_Res[fit2_corfitYesGest_Res$adj.P.Val<0.05,])])
+
+
+ordered_samples_TimeGEST <- order(data_for_limmaGEST$Time)
+expr_signif_Time_YesGestSex_ordered <- expr_signif_Time_YesGestSex[, ordered_samples_TimeGEST]
+expr_signif_Time_YesGestSexSex_ordered <- expr_signif_Time_YesGestSexSex[, ordered_samples_TimeGEST]
+group_factor_orderedGEST <- data_for_limmaGEST$Time[ordered_samples_TimeGEST]
+
+# Create annotation data frame
+annotation_colGEST <- data.frame(Group = group_factor_orderedGEST)
+rownames(annotation_colGEST) <- colnames(expr_signif_Time_YesGestSex_ordered)
+
+
+
+heat_noSex_YesGEST<-pheatmap(expr_signif_Time_YesGestSex_ordered,
+                             scale = "row",                 # optionally scale genes
+                             clustering_distance_rows = "euclidean",  # distance metric for genes
+                             clustering_method = "complete",          # clustering method
+                             cluster_cols=F,
+                             show_rownames = F,
+                             show_colnames = F,
+                             annotation_colGEST = annotation_colGEST, # adds color bar for sample groups
+                             color = colorRampPalette(c("blue", "white", "red"))(50)
+)
+
+ggsave(plot = heat_noSex_YesGEST,filename = "HeatmapSignifGenes_TimeAndGestation.tiff", units="in", width=8, height=8, dpi=300, compression = 'lzw',bg="white")
+
+
+heat_sex_YesGEST<-pheatmap(expr_signif_Time_YesGestSexSex_ordered,
+                           scale = "row",                 # optionally scale genes
+                           clustering_distance_rows = "euclidean",  # distance metric for genes
+                           clustering_method = "complete",          # clustering method
+                           cluster_cols=F,
+                           show_rownames = F,
+                           show_colnames = F,
+                           annotation_colGEST = annotation_colGEST, # adds color bar for sample groups
+                           color = colorRampPalette(c("blue", "white", "red"))(50)
+)
+
+ggsave(plot = heat_sex_YesGEST,filename = "HeatmapSignifGenes_TimeSexGest.tiff", units="in", width=8, height=8, dpi=300, compression = 'lzw',bg="white")
+
+
+#PCA plot
+
+
+PCA_signifGenesTimeOnly_YesGEST<-plot_pca(data = t(expr_signif_Time_YesGestSex),color_vec = data_for_limmaGEST$Time,shape_vec = data_for_limmaGEST$Sex,color_legend = "Time",shape_legend = "Sex",color_values = c("#D81B60","#1E88E5"))
+
+PCA_signifGenesTimeSexGEST<-plot_pca(data = t(expr_signif_Time_YesGestSexSex),color_vec = data_for_limmaGEST$Time,shape_vec = data_for_limmaGEST$Sex,color_legend = "Time",shape_legend = "Sex",color_values = c("#D81B60","#1E88E5"))
+
+ggsave(plot = PCA_signifGenesTimeOnly_YesGEST,filename = "PCA_signifGenesTimeOnly_YesGEST.tiff", units="in", width=7, height=6, dpi=300, compression = 'lzw',bg="white")
+ggsave(plot = PCA_signifGenesTimeSexGEST,filename = "PCA_signifGenesTimeSexGEST.tiff", units="in", width=7, height=6, dpi=300, compression = 'lzw',bg="white")
+
+# METAB_YesGestOLOMICS DATA ANALYSIS -----
+
+
+MetabNoNas_extracols<-read.csv("MetabNoNas_updated.csv",header=T)
+MetabNoNas_matchTranscr_notSupp<-MetabNoNas[MetabNoNas$Sample.ID%in%c(strsplit2(colnames(LT_NS),"_")[,1]),]
+
+
+#metabolomics PCA using metabNoNAs ####
+MetabNoNas_matchTranscr_notSupp<-MetabNoNas[MetabNoNas$Sample.ID%in%c(strsplit2(colnames(LT_NS),"_")[,1]),]
+
+#analysis of variance metabolomics ----
+formMETAB_YesGest <- ~(1|Time)+Gestation+(1|Sex)+(1|PatientID)
+
+#note as per package recommendation, all categorical variables are modeled as random effects with continuous as fixed effects
+
+varPartMETAB_YesGest <- fitExtractVarPartModel(t(numeric_dataMETAB_YesGest), formMETAB_YesGest, data_for_limmaMETAB_YesGest[,1:4])
+
+vpMETAB_YesGest <- sortCols(varPartMETAB_YesGest,last="Residuals")
+vpMETAB_YesGest_bars <-plotPercentBars(vpMETAB_YesGest)
+vpMETAB_YesGest_violin <- plotVarPart(vpMETAB_YesGest) 
+
+ggarrange(vpMETAB_YesGest_bars, vpMETAB_YesGest_violin, 
+          labels = c("A", "B"),
+          ncol = 2, nrow = 1)
+
+metab_varPar_plot_gest<-ggarrange(vpMETAB_YesGest_bars, vpMETAB_YesGest_violin, 
+                                  labels = c("A", "B"),
+                                  ncol = 2, nrow = 1)
+ggsave(plot = metab_varPar_plot_gest,filename = "metab_varPar_plot_wPID_Gest.tiff", units="in", width=11, height=9, dpi=300, compression = 'lzw',bg="white")
+
+
+
+# differential abundance metabolomics ----
+
+set.seed(800)
+data_for_limmaMETAB_YesGest<-data.frame("Time"=MetabNoNas_matchTranscr_notSupp$Day,
+                                        "Sex"=MetabNoNas_matchTranscr_notSupp$Sex,
+                                        "PatientID"=MetabNoNas_matchTranscr_notSupp$Sample.ID,
+                                        "Gestation"=MetabNoNas_matchTranscr_notSupp$Gestation,
+                                        log2(MetabNoNas_matchTranscr_notSupp[,9:ncol(MetabNoNas_matchTranscr_notSupp)]))
+
+
+data_for_limmaMETAB_YesGest<-data_for_limmaMETAB_YesGest[complete.cases(data_for_limmaMETAB_YesGest),]
+data_for_limmaMETAB_YesGest$Time<-factor(data_for_limmaMETAB_YesGest$Time,levels=c("3","10"))
+data_for_limmaMETAB_YesGest$PatientID<-factor(data_for_limmaMETAB_YesGest$PatientID)
+data_for_limmaMETAB_YesGest$Sex<-factor(data_for_limmaMETAB_YesGest$Sex,levels=c("Male","Female"))
+numeric_dataMETAB_YesGest<-log2(MetabNoNas_matchTranscr_notSupp[,9:ncol(MetabNoNas_matchTranscr_notSupp)])
+
+
+# Group first, intercept removed
+designNoPatNoSexMETAB_YesGest<-model.matrix(~0+Time+Gestation,data=data_for_limmaMETAB_YesGest)
+
+colnames(designNoPatNoSexMETAB_YesGest)<-c("t3","t10","Gest")#for sex F is 1
+
+colnames(designNoPatNoSexMETAB_YesGest)
+
+
+# Correlation structure (accounting for repeated measures)
+corfit_noPatnoSexMETAB_YesGest <- duplicateCorrelation(t(numeric_dataMETAB_YesGest), designNoPatNoSexMETAB_YesGest, block = data_for_limmaMETAB_YesGest$PatientID)
+
+fit_corfit_noSexMETAB_YesGest <- lmFit(t(numeric_dataMETAB_YesGest), designNoPatNoSexMETAB_YesGest, block = data_for_limmaMETAB_YesGest$PatientID, correlation = corfit_noPatnoSexMETAB_YesGest$consensus)
+
+# Contrast of interest: Treatment vs Control
+contrast.matrix2METAB_YesGest <- makeContrasts(Treatment_vs_Control = t10 - t3,
+                                               levels = designNoPatNoSexMETAB_YesGest
+)
+
+fit2_corfit_noSexMETAB_YesGest <- contrasts.fit(fit_corfit_noSexMETAB_YesGest, contrast.matrix2METAB_YesGest)
+fit2_corfit_noSexMETAB_YesGest <- eBayes(fit2_corfit_noSexMETAB_YesGest)
+fit2_corfit_noSexMETAB_YesGest_Res<-topTable(fit2_corfit_noSexMETAB_YesGest, coef="Treatment_vs_Control",adjust.method = "BH",number = ncol(numeric_dataMETAB_YesGest),)
+
+dim(fit2_corfit_noSexMETAB_YesGest_Res[fit2_corfit_noSexMETAB_YesGest_Res$adj.P.Val<0.05,])#nothing significant, two above 0.2
+
+
+
+pca_metab_signif_noSex_YesGest<-plot_pca(data = numeric_dataMETAB_YesGest[,colnames(numeric_dataMETAB_YesGest)%in%rownames(fit2_corfit_noSexMETAB_YesGest_Res[fit2_corfit_noSexMETAB_YesGest_Res$P.Value<0.05 ,])],
+                                         color_vec = factor(data_for_limmaMETAB_YesGest$Time,ordered = T,levels=c("3","10")),
+                                         shape_vec = factor(data_for_limmaMETAB_YesGest$Sex),
+                                         color_legend = "Time",shape_legend = "sex",color_values = c("#D81B60","#1E88E5"))
+ggsave(plot = pca_metab_signif_noSex_YesGest,filename = "PCA_signifMetabTimeOnlyGEST.tiff", units="in", width=7, height=6, dpi=300, compression = 'lzw',bg="white")
+
+write.csv(fit2_corfit_noSexMETAB_YesGest_Res,"DifferentialAbundanceMetabolites_ModelTimePatient_YesGestation.csv")
+
+## Now with Sex in the models
+
+
+designNoPatSexMETAB_YesGest<-model.matrix(~0+Time+Gestation+Sex,data=data_for_limmaMETAB_YesGest)
+
+colnames(designNoPatSexMETAB_YesGest)<-c("t3","t10","Gest","Sex")#for sex F is 1
+
+colnames(designNoPatSexMETAB_YesGest)
+
+
+# Correlation structure (accounting for repeated measures)
+corfit_noPatSexMETAB_YesGest <- duplicateCorrelation(t((numeric_dataMETAB_YesGest)), designNoPatSexMETAB_YesGest, block = data_for_limmaMETAB_YesGest$PatientID)
+
+fit_corfit_SexMETAB_YesGest <- lmFit(t(numeric_dataMETAB_YesGest), designNoPatSexMETAB_YesGest, block = data_for_limmaMETAB_YesGest$PatientID, correlation = corfit_noPatSexMETAB_YesGest$consensus)
+
+# Contrast of interest: Treatment vs Control
+contrast.matrix2METAB_YesGest_Sex <- makeContrasts(Treatment_vs_Control = t10 - t3,
+                                                   levels = designNoPatSexMETAB_YesGest
+)
+
+fit2_corfit_SexMETAB_YesGest <- contrasts.fit(fit_corfit_SexMETAB_YesGest, contrast.matrix2METAB_YesGest_Sex)
+fit2_corfit_SexMETAB_YesGest <- eBayes(fit2_corfit_SexMETAB_YesGest)
+fit2_corfit_SexMETAB_YesGest_Res<-topTable(fit2_corfit_SexMETAB_YesGest, coef="Treatment_vs_Control",adjust.method = "BH",number = ncol(numeric_dataMETAB_YesGest),)
+
+dim(fit2_corfit_SexMETAB_YesGest_Res[fit2_corfit_SexMETAB_YesGest_Res$adj.P.Val<0.05,])#o-acetylcarnitine is significant.
+
+
+#pca plot with those handful of metabolites significant prior correction
+pca_metab_signif_SexGEST<-plot_pca(data = numeric_dataMETAB_YesGest[,colnames(numeric_dataMETAB_YesGest)%in%rownames(fit2_corfit_SexMETAB_YesGest_Res[fit2_corfit_SexMETAB_YesGest_Res$P.Value<0.05 ,])],
+                                   color_vec = factor(data_for_limmaMETAB_YesGest$Time,ordered = T,levels=c("3","10")),
+                                   shape_vec = factor(data_for_limmaMETAB_YesGest$Sex),
+                                   color_legend = "Time",shape_legend = "sex",color_values = c("#D81B60","#1E88E5"))
+ggsave(plot = pca_metab_signif_SexGEST,filename = "PCA_signifMetabTimeSexGEST.tiff", units="in", width=7, height=6, dpi=300, compression = 'lzw',bg="white")
+
+write.csv(fit2_corfit_SexMETAB_YesGest_Res,"DifferentialAbundanceMetabolites_ModelTimeSexPatientandGEST.csv")
+
+
+
